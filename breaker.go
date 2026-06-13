@@ -51,7 +51,13 @@ type Breaker struct {
 }
 
 // NewBreaker 创建熔断器
+//
+// logger 可为 nil — 此时自动 fallback 到 slog.Default(),避免 panic
+// 这是 v0.6.0 M3 W5.2 修的 bug:SDK 翻译时 NewBreaker(nil) 是合法用法
 func NewBreaker(logger *slog.Logger) *Breaker {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Breaker{
 		logger:          logger,
 		states:          make(map[string]CircuitState),
@@ -69,6 +75,16 @@ func (cb *Breaker) RecordFailure(agentID string) {
 
 	cb.failures[agentID]++
 	cb.lastFailure[agentID] = time.Now()
+
+	// HalfOpen 状态再失败:直接回 Open(不需要等阈值)
+	// 这是 v0.6.0 M3 W5.2 修的 bug:老代码只处理 Closed→Open,HalfOpen 失败后 state 不动,会继续放行流量
+	if cb.states[agentID] == CircuitHalfOpen {
+		cb.states[agentID] = CircuitOpen
+		cb.logger.Warn("Circuit breaker re-opened from half-open",
+			"agent", agentID,
+		)
+		return
+	}
 
 	if cb.states[agentID] == CircuitClosed && cb.failures[agentID] >= cb.failureThreshold {
 		cb.states[agentID] = CircuitOpen
