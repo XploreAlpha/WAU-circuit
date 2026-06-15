@@ -220,3 +220,74 @@ func TestCircuitState_String(t *testing.T) {
 		}
 	}
 }
+
+// ============================
+// GetAllStates — v0.7.0 W5.2.2 新增
+// ============================
+
+func TestBreaker_GetAllStates(t *testing.T) {
+	t.Run("empty breaker returns empty map", func(t *testing.T) {
+		cb := circuit.NewBreaker(nil)
+		got := cb.GetAllStates()
+		if got == nil {
+			t.Fatal("expected non-nil empty map, got nil")
+		}
+		if len(got) != 0 {
+			t.Errorf("expected empty, got %d entries", len(got))
+		}
+	})
+
+	t.Run("returns agents that have entered Open or HalfOpen", func(t *testing.T) {
+		cb := circuit.NewBreaker(nil)
+		cb.SetFailureThreshold(2)
+		// A: 触发 Open(states[A]=Open)
+		cb.RecordFailure("A")
+		cb.RecordFailure("A")
+		// B: 1 次失败,未到阈值,states[B] 没 key
+		cb.RecordFailure("B")
+		// C: RecordSuccess 不写 states
+		cb.RecordSuccess("C")
+		// D: RecordFailure 2 次也 Open
+		cb.RecordFailure("D")
+		cb.RecordFailure("D")
+
+		got := cb.GetAllStates()
+		// 只 A、D 进了 states map(B 1 次失败 / C 0 次都没写)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 entries (A, D), got %d: %+v", len(got), got)
+		}
+		if got["A"] != circuit.CircuitOpen {
+			t.Errorf("A: want Open, got %s", got["A"])
+		}
+		if got["D"] != circuit.CircuitOpen {
+			t.Errorf("D: want Open, got %s", got["D"])
+		}
+		if _, ok := got["B"]; ok {
+			t.Errorf("B (1 failure, not at threshold) should NOT be in states map")
+		}
+		if _, ok := got["C"]; ok {
+			t.Errorf("C (success only) should NOT be in states map")
+		}
+	})
+
+	t.Run("returned map is a defensive copy", func(t *testing.T) {
+		cb := circuit.NewBreaker(nil)
+		cb.RecordFailure("X")
+		cb.RecordSuccess("X")
+
+		got := cb.GetAllStates()
+		// 改返回 map 不应影响内部状态
+		got["X"] = circuit.CircuitOpen
+		got["Y"] = circuit.CircuitOpen // 新增不影响
+		delete(got, "X")
+
+		// 重新 GetAllStates,内部状态应不变
+		again := cb.GetAllStates()
+		if _, ok := again["Y"]; ok {
+			t.Error("adding to returned map leaked into breaker state")
+		}
+		if again["X"] == circuit.CircuitOpen {
+			t.Error("modifying returned map value leaked into breaker state")
+		}
+	})
+}

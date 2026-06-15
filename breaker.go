@@ -167,3 +167,25 @@ func (cb *Breaker) SetFailureThreshold(threshold int) {
 func (cb *Breaker) SetRecoveryTimeout(timeout time.Duration) {
 	cb.recoveryTimeout = timeout
 }
+
+// GetAllStates 返回所有 (agentID) 当前的熔断状态副本
+//
+// v0.7.0 W5.2.2 新增:补 v0.3.0 留下的 GetAllStates 占位(原 handler 返空 map)。
+// 用途:运维 dashboard / 监控 / 跨 agent 健康检查。
+//
+// 行为:
+//   - 返回 map 是内部 states 的 snapshot copy,外部修改不影响 Breaker 状态
+//   - 没出现过的 agentID 不在结果里(只有 record 过失败/成功的才会出现)
+//   - 读路径用 RLock,不阻塞 RecordXxx
+//   - 已 stale 的 Open 状态(超过 recoveryTimeout)GetState 会转 HalfOpen,
+//     这里直接返回内部存的 CircuitOpen,调用方需要的话再 GetState 单查
+func (cb *Breaker) GetAllStates() map[string]CircuitState {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+
+	out := make(map[string]CircuitState, len(cb.states))
+	for k, v := range cb.states {
+		out[k] = v
+	}
+	return out
+}
